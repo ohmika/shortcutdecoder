@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Shortcut Decoder</title>
+<style>
+:root{--bg:#f6f6f8;--card:#fff;--fg:#1c1c1e;--mut:#6b6b73;--acc:#0a7aff;--bd:#dcdce2;--code:#f0f0f4;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#111114;--card:#1c1c20;--fg:#f2f2f5;--mut:#9a9aa5;--acc:#4da3ff;--bd:#33333a;--code:#26262c}}
+:root[data-theme="dark"]{--bg:#111114;--card:#1c1c20;--fg:#f2f2f5;--mut:#9a9aa5;--acc:#4da3ff;--bd:#33333a;--code:#26262c}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.45 -apple-system,system-ui,"Segoe UI",Roboto,sans-serif}
+main{max-width:860px;margin:0 auto;padding:16px}
+h1{font-size:1.4rem;margin:8px 0 4px}
+p.sub{color:var(--mut);margin:0 0 16px}
+#drop{display:block;border:2px dashed var(--bd);border-radius:14px;padding:28px 16px;text-align:center;background:var(--card);cursor:pointer}
+#drop.over{border-color:var(--acc)}
+#drop b{color:var(--acc)}
+input[type=file]{display:none}
+.url{display:flex;gap:8px;margin-top:10px}
+.url input,#px input{flex:1;min-width:0;font:inherit;padding:9px 12px;border-radius:10px;border:1px solid var(--bd);background:var(--card);color:var(--fg)}
+#man{margin-top:8px;font-size:.9rem}#man summary{color:var(--mut)}#man ol{padding-left:20px;margin:8px 0 0}#man a{color:var(--acc)}#man textarea{display:block;width:100%;margin:6px 0;font:12px ui-monospace,Menlo,monospace;padding:8px;border-radius:10px;border:1px solid var(--bd);background:var(--card);color:var(--fg)}
+#px{margin-top:8px;font-size:.9rem}#px input{width:100%;margin-top:8px}#px p{margin:6px 0 0}
+#px summary{font-weight:400;color:var(--mut)}
+#msg{margin:12px 0;padding:10px 12px;border-radius:10px;background:var(--card);border:1px solid var(--bd);display:none}
+#msg.err{border-color:#e5484d;color:#e5484d}
+#out{display:none}
+.bar{display:flex;gap:8px;flex-wrap:wrap;margin:16px 0 8px}
+button{font:inherit;padding:8px 14px;border-radius:10px;border:1px solid var(--bd);background:var(--card);color:var(--fg)}
+button.on{background:var(--acc);border-color:var(--acc);color:#fff}
+.meta{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:10px 14px;margin-bottom:10px;font-size:.9rem}
+.meta div{display:flex;justify-content:space-between;gap:12px;padding:2px 0}
+.meta span:first-child{color:var(--mut)}
+details{background:var(--card);border:1px solid var(--bd);border-radius:12px;margin:8px 0;padding:10px 14px}
+summary{cursor:pointer;font-weight:600;word-break:break-word}
+summary small{color:var(--mut);font-weight:400}
+pre{background:var(--code);border-radius:10px;padding:12px;overflow-x:auto;font:12.5px/1.4 ui-monospace,Menlo,monospace;margin:8px 0 0;white-space:pre-wrap;word-break:break-word}
+#json pre{white-space:pre;word-break:normal;max-height:70vh;overflow:auto}
+</style>
+</head>
+<body>
+<main>
+<h1>Shortcut Decoder</h1>
+<p class="sub">Upload a .shortcut file (signed ones too) or paste an iCloud link. Decoding happens locally in your browser.</p>
+<label id="drop" for="f"><div>📄 <b>Choose a file</b> or drop it here</div></label>
+<input id="f" type="file" accept=".shortcut,.plist,.wflow,*/*">
+<div class="url"><input id="u" type="url" inputmode="url" placeholder="https://www.icloud.com/shortcuts/..." autocomplete="off"><button id="ug">Fetch</button></div>
+<details id="px"><summary>Blocked by CORS? Use a proxy</summary><input id="pu" type="url" placeholder="https://your-proxy.example/?url=" autocomplete="off"><p class="sub">The proxy URL is prepended to each request (target URL is URL-encoded). The proxy will see the iCloud link, so only use one you trust.</p></details>
+
+<details id="man"><summary>Manual fallback (no proxy needed)</summary>
+<ol class="sub"><li><a id="rec" target="_blank" rel="noopener">Open the iCloud record</a> and copy all text on that page.</li>
+<li>Paste it here:<textarea id="rj" rows="3" placeholder='{"fields":{...}}'></textarea></li>
+<li>File name: <input id="fnm" placeholder="auto-detected, editable" style="font:inherit;padding:6px 10px;border-radius:10px;border:1px solid var(--bd);background:var(--card);color:var(--fg);width:100%;margin:6px 0"></li>
+<li><a id="dlk" target="_blank" rel="noopener" style="display:none">Download the .shortcut file</a>, then drop it in the box above.</li></ol></details>
+<div id="msg"></div>
+<div id="out">
+  <div class="bar">
+    <button id="tA" class="on">Actions</button>
+    <button id="tJ">JSON</button>
+    <button id="cp">Copy JSON</button>
+    <button id="dl">Download JSON</button>
+  </div>
+  <div id="meta" class="meta"></div>
+  <div id="actions"></div>
+  <div id="json" style="display:none"><pre id="jp"></pre></div>
+</div>
+</main>
+<script>
+const $=id=>document.getElementById(id);
+let current=null,fname="shortcut";
+
+function parseBplist(buf){
+  const u=new Uint8Array(buf),dv=new DataView(buf),t=u.length-32;
+  const os=u[t+6],rs=u[t+7],top=Number(dv.getBigUint64(t+16)),ot=Number(dv.getBigUint64(t+24));
+  const rd=(p,s)=>{let v=0;for(let i=0;i<s;i++)v=v*256+u[p+i];return v};
+  const off=i=>rd(ot+i*os,os),cache=new Map();
+  const info=(p,l)=>{if(l<15)return[l,p+1];const sz=1<<(u[p+1]&15);return[rd(p+2,sz),p+2+sz]};
+  function obj(i){if(!cache.has(i))cache.set(i,parse(i));return cache.get(i)}
+  function parse(i){
+    const p=off(i),m=u[p],h=m>>4,l=m&15;
+    switch(h){
+      case 0:return l==8?false:l==9?true:null;
+      case 1:{const s=1<<l;return s==8?Number(dv.getBigInt64(p+1)):rd(p+1,s)}
+      case 2:return l==2?dv.getFloat32(p+1):dv.getFloat64(p+1);
+      case 3:return new Date((978307200+dv.getFloat64(p+1))*1000).toISOString();
+      case 4:{const[n]=info(p,l);return "<data: "+n+" bytes>"}
+      case 5:{const[n,s]=info(p,l);return new TextDecoder("latin1").decode(u.subarray(s,s+n))}
+      case 6:{const[n,s]=info(p,l);let r="";for(let k=0;k<n;k++)r+=String.fromCharCode((u[s+2*k]<<8)|u[s+2*k+1]);return r}
+      case 8:return{UID:rd(p+1,l+1)};
+      case 0xA:{const[n,s]=info(p,l);const a=[];for(let k=0;k<n;k++)a.push(obj(rd(s+k*rs,rs)));return a}
+      case 0xD:{const[n,s]=info(p,l);const o={};for(let k=0;k<n;k++){const key=obj(rd(s+k*rs,rs)),val=obj(rd(s+(n+k)*rs,rs));o[key]=val}return o}
+    }
+    throw new Error("Unknown object type 0x"+h.toString(16));
+  }
+  return obj(top);
+}
+
+function parseXml(text){
+  const d=new DOMParser().parseFromString(text,"application/xml");
+  if(d.querySelector("parsererror"))throw new Error("Invalid XML plist");
+  const conv=n=>{
+    switch(n.tagName){
+      case"dict":{const o={};const k=[...n.children];for(let i=0;i<k.length;i+=2)o[k[i].textContent]=conv(k[i+1]);return o}
+      case"array":return[...n.children].map(conv);
+      case"string":return n.textContent;
+      case"integer":return parseInt(n.textContent,10);
+      case"real":return parseFloat(n.textContent);
+      case"true":return true;case"false":return false;
+      case"date":return n.textContent;
+      case"data":return"<data: "+n.textContent.replace(/\s/g,"").length*3/4+" bytes>";
+    }
+    return null;
+  };
+  return conv(d.querySelector("plist").firstElementChild);
+}
+
+/* ---------- LZVN ---------- */
+function lzvnDecode(src,dst,op0,nOut){
+  let ip=0,op=op0,end=op0+nOut,D=0;
+  const lit=n=>{for(let i=0;i<n&&op<end;i++)dst[op++]=src[ip+i];ip+=n};
+  const mat=m=>{if(D<=0||op-D<0)throw new Error("LZVN: invalid distance");for(let i=0;i<m&&op<end;i++){dst[op]=dst[op-D];op++}};
+  while(ip<src.length&&op<end){
+    const b=src[ip];
+    if(b>=0xf0){const m=b===0xf0?16+src[ip+1]:b&15;ip+=b===0xf0?2:1;mat(m);continue}
+    if(b>=0xe0){let l;if(b===0xe0){l=16+src[ip+1];ip+=2}else{l=b&15;ip+=1}lit(l);continue}
+    if(b===0x06)break;
+    if(b===0x0e||b===0x16){ip++;continue}
+    const L=b>>6,low=b&7;let M,len;
+    if((b&0xe0)===0xa0){const b1=src[ip+1],b2=src[ip+2];M=(((b&7)<<2)|(b1&3))+3;D=(b1>>2)|(b2<<6);len=3;
+      const l=(b>>3)&3;ip+=len;lit(l);mat(M);continue}
+    M=((b>>3)&7)+3;
+    if(low===7){D=src[ip+1]|(src[ip+2]<<8);len=3}
+    else if(low===6){len=1}
+    else{D=((b&7)<<8)|src[ip+1];len=2}
+    ip+=len;lit(L);mat(M);
+  }
+  return op-op0;
+}
+/* ---------- LZFSE ---------- */
+const NB=[2,3,2,5,2,3,2,8,2,3,2,5,2,3,2,14,2,3,2,5,2,3,2,8,2,3,2,5,2,3,2,14];
+const VAL=[0,2,1,4,0,3,1,-1,0,2,1,5,0,3,1,-1,0,2,1,6,0,3,1,-1,0,2,1,7,0,3,1,-1];
+const L_VB=[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2,3,5,8],L_VBASE=[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,20,28,60];
+const M_VB=[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3,5,8,11],M_VBASE=[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,24,56,312];
+const D_VB=[],D_VBASE=[];(()=>{let c=0;for(let g=0;g<16;g++)for(let i=0;i<4;i++){D_VB.push(g);D_VBASE.push(c);c+=1<<g}})();
+function fseTable(nstates,freq,vb,vbase){
+  const nclz=Math.clz32(nstates),t=[];
+  for(let i=0;i<freq.length;i++){
+    const f=freq[i];if(!f)continue;
+    const k=Math.clz32(f)-nclz,j0=((2*nstates)>>k)-f;
+    for(let j=0;j<f;j++){
+      let kk,delta;
+      if(j<j0){kk=k;delta=((f+j)<<k)-nstates}else{kk=k-1;delta=(j-j0)<<(k-1)}
+      t.push({k:kk,sym:i,delta,vb:vb?vb[i]:0,base:vbase?vbase[i]:0});
+    }
+  }
+  if(t.length!==nstates)throw new Error("LZFSE: invalid frequency table");
+  return t;
+}
+function backReader(buf,start,len,nb){
+  let pos=len*8+nb;
+  return k=>{
+    if(!k)return 0;pos-=k;if(pos<0)throw new Error("LZFSE: bitstream too short");
+    const b0=pos>>3,off=pos&7,cnt=(off+k+7)>>3;let v=0,m=1;
+    for(let i=0;i<cnt;i++){v+=buf[start+b0+i]*m;m*=256}
+    return Math.floor(v/2**off)%2**k;
+  };
+}
+function lzfseV2(src,ip,dst,op){
+  const dv=new DataView(src.buffer,src.byteOffset,src.byteLength);
+  const nRaw=dv.getUint32(ip+4,true);
+  const f0=dv.getBigUint64(ip+8,true),f1=dv.getBigUint64(ip+16,true),f2=dv.getBigUint64(ip+24,true);
+  const bits=(v,lo,n)=>Number((v>>BigInt(lo))&((1n<<BigInt(n))-1n));
+  const nLit=bits(f0,0,20),nLitB=bits(f0,20,20),nMat=bits(f0,40,20),litBits=bits(f0,60,3)-7;
+  const litSt=[0,10,20,30].map(s=>bits(f1,s,10)),nLmdB=bits(f1,40,20),lmdBits=bits(f1,60,3)-7;
+  const hdr=bits(f2,0,32);let ls=bits(f2,32,10),ms=bits(f2,42,10),ds=bits(f2,52,10);
+  // frequency table
+  const fr=[];let acc=0,nb=0,p=ip+32;const pe=ip+hdr;
+  for(let i=0;i<360;i++){
+    while(p<pe&&nb+8<=32){acc=(acc|(src[p++]<<nb))>>>0;nb+=8}
+    const b=acc&31,n=NB[b];let v;
+    if(n===8)v=8+((acc>>>4)&15);else if(n===14)v=24+((acc>>>4)&1023);else v=VAL[b];
+    if(n>nb)throw new Error("LZFSE: frequency table truncated");
+    acc>>>=n;nb-=n;fr.push(v);
+  }
+  const lT=fseTable(64,fr.slice(0,20),L_VB,L_VBASE),mT=fseTable(64,fr.slice(20,40),M_VB,M_VBASE),
+        dT=fseTable(256,fr.slice(40,104),D_VB,D_VBASE),litT=fseTable(1024,fr.slice(104,360));
+  // literals
+  const lit=new Uint8Array(nLit+4),pl=backReader(src,ip+hdr,nLitB,litBits);
+  for(let i=0;i<nLit;i+=4)for(let s=0;s<4;s++){const e=litT[litSt[s]];litSt[s]=e.delta+pl(e.k);lit[i+s]=e.sym}
+  // matches
+  const pm=backReader(src,ip+hdr+nLitB,nLmdB,lmdBits);
+  const val=(T,st)=>{const e=T[st];const sv=pm(e.k+e.vb);return[e.delta+(sv>>>e.vb),e.base+(sv&((1<<e.vb)-1))]};
+  const start=op;let D=0,lp=0,r;
+  for(let i=0;i<nMat;i++){
+    r=val(lT,ls);ls=r[0];const L=r[1];
+    r=val(mT,ms);ms=r[0];const M=r[1];
+    r=val(dT,ds);ds=r[0];if(r[1])D=r[1];
+    for(let k=0;k<L;k++)dst[op++]=lit[lp++];
+    if(D<=0||op-D<0)throw new Error("LZFSE: invalid distance");
+    for(let k=0;k<M;k++){dst[op]=dst[op-D];op++}
+  }
+  while(op-start<nRaw)dst[op++]=lit[lp++];
+  return[op,ip+hdr+nLitB+nLmdB];
+}
+function lzfseDecode(src,outSize){
+  const dst=new Uint8Array(outSize+64),dv=new DataView(src.buffer,src.byteOffset,src.byteLength);
+  let ip=0,op=0;
+  while(ip+4<=src.length){
+    const mg=dv.getUint32(ip,true);
+    if(mg===0x24787662)break;
+    if(mg===0x2d787662){const n=dv.getUint32(ip+4,true);dst.set(src.subarray(ip+8,ip+8+n),op);op+=n;ip+=8+n}
+    else if(mg===0x6e787662){const n=dv.getUint32(ip+4,true),pl=dv.getUint32(ip+8,true);lzvnDecode(src.subarray(ip+12,ip+12+pl),dst,op,n);op+=n;ip+=12+pl}
+    else if(mg===0x32787662){[op,ip]=lzfseV2(src,ip,dst,op)}
+    else throw new Error("LZFSE: unknown block 0x"+mg.toString(16));
+  }
+  return dst.subarray(0,op);
+}
+/* ---------- AEA (profile 0: signed, not encrypted) ---------- */
+function aeaExtract(buf){
+  const u=new Uint8Array(buf),dv=new DataView(buf);
+  const profile=u[4]|(u[5]<<8)|(u[6]<<16);
+  if(profile!==0)throw new Error("AEA profile "+profile+" is not supported (only profile 0: signed, not encrypted).");
+  let p=12+dv.getUint32(8,true)+128+32+32+32;
+  const raw=Number(dv.getBigUint64(p,true)),segsPer=dv.getUint32(p+20,true),comp=String.fromCharCode(u[p+24]),cks=u[p+25];
+  p+=48+32;
+  const ck=cks===0?0:cks===1?8:32,out=[];let got=0;
+  while(got<raw){
+    const info=p;p+=(ck+8)*segsPer+32+32*segsPer;
+    for(let s=0;s<segsPer&&got<raw;s++){
+      const dsz=dv.getUint32(info+s*(ck+8),true),csz=dv.getUint32(info+s*(ck+8)+4,true);
+      if(!dsz&&!csz)break;
+      const seg=u.subarray(p,p+csz);p+=csz;let d;
+      if(comp==="-"||csz===dsz&&!(seg[0]===0x62&&seg[1]===0x76&&seg[2]===0x78))d=seg;
+      else if(comp==="e")d=lzfseDecode(seg,dsz);
+      else if(comp==="f"){d=new Uint8Array(dsz);lzvnDecode(seg,d,0,dsz)}
+      else throw new Error("Compression method '"+comp+"' is not supported.");
+      out.push(d);got+=d.length;
+    }
+    if(p>=u.length)break;
+  }
+  const all=new Uint8Array(got);let o=0;for(const d of out){all.set(d,o);o+=d.length}
+  return all;
+}
+function findBplist(a){
+  const mg=[98,112,108,105,115,116,48,48];
+  for(let i=0;i+40<=a.length;i++){
+    if(!mg.every((c,k)=>a[i+k]===c))continue;
+    for(let e=a.length;e>=i+40;e--){
+      const t=e-32,os=a[t+6],rs=a[t+7];
+      if(a[t]||a[t+1]||a[t+2]||a[t+3]||a[t+4]||os<1||os>8||rs<1||rs>8)continue;
+      const dv=new DataView(a.buffer,a.byteOffset+t,32);
+      const n=Number(dv.getBigUint64(8)),ot=Number(dv.getBigUint64(24));
+      if(ot+n*os+32===e-i)return a.slice(i,e).buffer;
+    }
+  }
+  return null;
+}
+
+function decode(buf){
+  const u=new Uint8Array(buf);
+  const head=String.fromCharCode(...u.subarray(0,8));
+  if(head.startsWith("bplist00"))return parseBplist(buf);
+  if(head.startsWith("AEA1")){
+    const arch=aeaExtract(buf);
+    const pb=findBplist(arch);
+    if(pb)return parseBplist(pb);
+    const t=new TextDecoder().decode(arch);
+    if(/<plist/.test(t))return parseXml(t.slice(t.indexOf("<?xml")>=0?t.indexOf("<?xml"):t.indexOf("<plist")));
+    throw new Error("AEA unpacked ("+arch.length+" bytes) but no plist found.");
+  }
+  const text=new TextDecoder().decode(u);
+  if(/<plist/.test(text))return parseXml(text);
+  throw new Error("Unknown file format (starts with: "+JSON.stringify(head.replace(/[^\x20-\x7e]/g,"?"))+")");
+}
+
+function show(data){
+  current=data;
+  $("jp").textContent=JSON.stringify(data,null,2);
+  const meta=$("meta");meta.innerHTML="";
+  const add=(k,v)=>{const d=document.createElement("div");const a=document.createElement("span"),b=document.createElement("span");a.textContent=k;b.textContent=v;d.append(a,b);meta.append(d)};
+  const acts=Array.isArray(data.WFWorkflowActions)?data.WFWorkflowActions:[];
+  add("File",fname);
+  add("Number of actions",acts.length);
+  if(data.WFWorkflowClientVersion)add("Client version",data.WFWorkflowClientVersion);
+  if(data.WFWorkflowMinimumClientVersion)add("Min. version",data.WFWorkflowMinimumClientVersion);
+  if(data.WFWorkflowTypes)add("Types",[].concat(data.WFWorkflowTypes).join(", "));
+  if(data.WFWorkflowImportQuestions&&data.WFWorkflowImportQuestions.length)add("Import questions",data.WFWorkflowImportQuestions.length);
+  const box=$("actions");box.innerHTML="";
+  if(!acts.length){const p=document.createElement("p");p.className="sub";p.textContent="No WFWorkflowActions found; check the JSON tab.";box.append(p)}
+  acts.forEach((a,i)=>{
+    const id=String(a.WFWorkflowActionIdentifier||"?");
+    const params=a.WFWorkflowActionParameters||{};
+    const d=document.createElement("details"),s=document.createElement("summary");
+    const label=id.replace(/^is\.workflow\.actions\./,"");
+    const hint=params.CustomOutputName||params.WFCommentActionText||"";
+    s.append((i+1)+". "+label);
+    if(hint){const sm=document.createElement("small");sm.textContent="  – "+String(hint).slice(0,80);s.append(sm)}
+    const pre=document.createElement("pre");pre.textContent=JSON.stringify(params,null,2);
+    d.append(s,pre);box.append(d);
+  });
+  $("out").style.display="block";
+  tab("A");
+}
+
+function tab(t){
+  $("actions").style.display=t=="A"?"block":"none";
+  $("meta").style.display=t=="A"?"block":"none";
+  $("json").style.display=t=="J"?"block":"none";
+  $("tA").classList.toggle("on",t=="A");$("tJ").classList.toggle("on",t=="J");
+}
+
+function msg(t,err){const m=$("msg");m.textContent=t;m.className=err?"err":"";m.style.display=t?"block":"none"}
+
+async function handle(file){
+  if(!file)return;
+  msg("");$("out").style.display="none";
+  fname=file.name;
+  try{show(decode(await file.arrayBuffer()))}
+  catch(e){msg(e.message,true)}
+}
+
+$("f").addEventListener("change",e=>handle(e.target.files[0]));
+const dr=$("drop");
+["dragenter","dragover"].forEach(ev=>dr.addEventListener(ev,e=>{e.preventDefault();dr.classList.add("over")}));
+["dragleave","drop"].forEach(ev=>dr.addEventListener(ev,e=>{e.preventDefault();dr.classList.remove("over")}));
+dr.addEventListener("drop",e=>handle(e.dataTransfer.files[0]));
+
+async function fetchIcloud(){
+  const m=$("u").value.match(/shortcuts\/(?:api\/records\/)?([0-9a-f]{32})/i);
+  if(!m)return msg("Not a valid iCloud shortcut link (expected .../shortcuts/<32-character id>).",true);
+  const px=$("pu").value.trim(),w=x=>px?px+encodeURIComponent(x):x;
+  if(/icloud\.com\/shortcuts/i.test(px))return msg("The proxy field contains the iCloud link. Clear it (leave it empty unless you have a real proxy).",true);
+  setRec();
+  $("out").style.display="none";msg("Fetching shortcut...");
+  try{
+    const r=await fetch(w("https://www.icloud.com/shortcuts/api/records/"+m[1]));
+    if(!r.ok)throw new Error("iCloud returned HTTP "+r.status+(r.status===404?" (link removed or invalid)":""));
+    const j=await r.json(),f=j.fields||{};
+    const dl=f.shortcut&&f.shortcut.value&&f.shortcut.value.downloadURL;
+    if(!dl)throw new Error("No download URL in the record (link removed or API changed).");
+    const name=(f.name&&f.name.value)||"shortcut";
+    const r2=await fetch(w(dl.replace("${f}",encodeURIComponent(name+".shortcut"))));
+    if(!r2.ok)throw new Error("Download failed: HTTP "+r2.status);
+    fname=name+".shortcut";
+    show(decode(await r2.arrayBuffer()));msg("");
+  }catch(e){
+    if(e instanceof TypeError){msg("Your browser blocked the request (iCloud does not allow cross-site requests). Use the manual fallback below, or a proxy.",true);$("man").open=true}
+    else msg(e.message,true);
+  }
+}
+
+function setRec(){const m=$("u").value.match(/shortcuts\/(?:api\/records\/)?([0-9a-f]{32})/i);$("rec").href=m?"https://www.icloud.com/shortcuts/api/records/"+m[1]:"#";return m}
+$("u").addEventListener("input",setRec);
+let nameDirty=false;
+$("fnm").addEventListener("input",()=>{nameDirty=true;build()});
+$("rj").addEventListener("input",build);
+function build(){
+  const t=$("rj").value.trim(),a=$("dlk");a.style.display="none";if(!t)return;
+  let dl=null,name=null;
+  try{const j=JSON.parse(t),f=j.fields||{};dl=f.shortcut&&f.shortcut.value&&f.shortcut.value.downloadURL;if(f.name&&f.name.value)name=f.name.value}catch(e){}
+  if(!dl){const m=t.match(/https:\/\/[^"\s]+/);if(m)dl=m[0]}
+  if(!name){const m=t.match(/"name"\s*:\s*\{[^}]*?"value"\s*:\s*"((?:[^"\\]|\\.)*)"/)||t.match(/\bname\b\s*\n?\s*(?:value\s*:?\s*)"?([^"\n]+)"?/);if(m)name=m[1]}
+  if(!dl)return msg("No download URL found in the pasted text.",true);
+  msg("");
+  if(!nameDirty&&name)$("fnm").value=name;
+  const nm=$("fnm").value.trim()||name||"shortcut";
+  const fn=nm.replace(/\.shortcut$/i,"").replace(/[\/\\:*?"<>|#%]/g,"-").trim()+".shortcut";
+  a.href=dl.replace("${f}",fn);a.download=fn;a.textContent="Download "+fn;a.style.display="inline";
+  const url=a.href;
+  fetch(url).then(r=>r.ok?r.blob():Promise.reject()).then(b=>{if(a.href===url){a.href=URL.createObjectURL(b);a.download=fn}}).catch(()=>{});
+}
+$("ug").onclick=fetchIcloud;
+$("u").addEventListener("keydown",e=>{if(e.key==="Enter")fetchIcloud()});
+$("tA").onclick=()=>tab("A");$("tJ").onclick=()=>tab("J");
+$("cp").onclick=async()=>{try{await navigator.clipboard.writeText($("jp").textContent);$("cp").textContent="Copied ✓"}catch(e){$("cp").textContent="Copy failed"}setTimeout(()=>$("cp").textContent="Copy JSON",1500)};
+$("dl").onclick=()=>{
+  if(!current)return;
+  const a=document.createElement("a");
+  a.href=URL.createObjectURL(new Blob([$("jp").textContent],{type:"application/json"}));
+  a.download=fname.replace(/\.[^.]+$/,"")+".json";a.click();
+};
+</script>
+</body>
+</html>
